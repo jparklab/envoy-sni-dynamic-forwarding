@@ -23,7 +23,9 @@ https://github.com/envoyproxy/envoy/issues/9023
 
 ### 1. Build an envoy with a patch
 
-Below is the modification I made to `ext_authz` filter
+In order to fully test sni_dynamic_forwarding_proxy filter with ext_authz, we need to build an Envoy proxy with a change to make ext_authz filter be applied on new connections. Below is the modification I made to `ext_authz` filter
+
+You can run tests with a vanilla envoy in case you want to check where Envoy fails to route requests.
 
 ```
 $ git diff source/extensions/filters/network/ext_authz/ext_authz.cc
@@ -69,7 +71,7 @@ index 2a8276a1f6..9baa93a26a 100644
  }
  ```
 
-### 2. Build an envoy with a patch
+### 2. Build Wasm module
 
 Wasm module is used to set filter state with a metadata value that is set by the ext_authz filter.
 You can use the Wasm module from the repo. In case you need to rebuild the wasm module, follow instructions below.
@@ -79,7 +81,7 @@ cd wasm-plugin
 make
 ```
 
-### 3. Build an envoy with a patch
+### 3. Run the test
 
 ```
 ./run-test -o output --nginx-bin <path to nginx binary> --envoy-bin <path to envoy binary>
