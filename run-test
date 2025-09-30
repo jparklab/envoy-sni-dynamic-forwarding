@@ -1,0 +1,115 @@
+#!/usr/bin/python3
+import argparse
+import logging
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+LOG = logging.getLogger("envoy-test")
+
+def generate_certificate(name: str, outdir: str) -> [str, str]:
+    """Generate a self-signed certificate"""
+    subprocess.check_call(f"generate-cert.sh {outdir} {name}", shell=True)
+    return [
+        os.path.join(outdir, "server-cert.pem"),
+        os.path.join(outdir, "server-key.pem"),
+    ]
+
+def run():
+    logging.basicConfig(level=logging.INFO)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-o", "--output-dir", default="output", help="output directory where logs will be stored")
+    parser.add_argument("--envoy-bin", help="path to envoy binary", default="envoy")
+    parser.add_argument("--nginx-bin", help="path to nginx binary", default="nginx")
+    parser.add_argument("--sni", help="SNI name used to connect to the service", default="fake-service.mydomain.com")
+
+    args = parser.parse_args()
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    if not os.path.exists(args.envoy_bin):
+        sys.exit(f"Unable to find envoy binary at {args.envoy_bin}")
+    if not os.path.exists(args.nginx_bin):
+        sys.exit(f"Unable to find nginx binary at {args.nginx_bin}")
+
+    test_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+    output_dir = os.path.abspath(args.output_dir)
+
+    envoy_bin = args.envoy_bin
+    if not os.path.exists(envoy_bin):
+        sys.exit(f"Unable to find {envoy_bin}, please set path to envoy binary using --envoy-bin option")
+
+    LOG.info("Generate self signed cert for the server")
+    generate_certificate(args.sni, args.output_dir)
+
+    envoy_config = os.path.join(test_dir, "config", "envoy-sni-dynamic-forwarding.yaml")
+    orig_nginx_config = os.path.join(test_dir, "config", "nginx.conf")
+    nginx_config = os.path.join(output_dir, "nginx.conf")
+
+    # copy nginx.conf to output directory since nginx finds certificates using the path of config
+    shutil.copy(orig_nginx_config, nginx_config)
+
+    processes = []
+    try:
+        LOG.info("Start ext_authz server")
+        authz_proc = subprocess.Popen(
+            "go run cmd/main.go",
+            shell=True,
+            stdout=open(os.path.join(output_dir, "authz.stdout"), "w"),
+            stderr=open(os.path.join(output_dir, "authz.stderr"), "w"),
+            preexec_fn=os.setsid,
+        )
+        processes.append(authz_proc)
+
+        LOG.info("Start nginx as upstream service")
+        nginx_proc = subprocess.Popen(
+            [args.nginx_bin, "-p", output_dir, "-c", nginx_config],
+            stdout=open(os.path.join(output_dir, "nginx.stdout"), "w"),
+            stderr=open(os.path.join(output_dir, "nginx.stderr"), "w"),
+            preexec_fn=os.setsid,
+        )
+        processes.append(nginx_proc)
+
+        envoy_proc = subprocess.Popen(
+            [   envoy_bin, 
+                "-c", envoy_config,
+                "--base-id", "1", "-l", "debug"
+            ],
+            stdout=open(os.path.join(output_dir, "envoy.stdout"), "w"),
+            stderr=open(os.path.join(output_dir, "envoy.stderr"), "w"),
+            preexec_fn=os.setsid,
+        )
+        processes.append(envoy_proc)
+
+        # sleep 3 seconds for nginx/envoy to finish initialization
+        time.sleep(3)
+        for p in processes:
+            if p.poll() is not None:
+                raise Exception(f"Failed to start process {p.args}: {p.returncode}")
+
+        print("-" * 60)
+        print("curl output:")
+        print("")
+        subprocess.call(
+            f"curl --cacert {args.output_dir}/ca-cert.pem --connect-to ::127.0.0.1:10000 https://{args.sni}/",
+            stdout=sys.stdout, stderr=sys.stdout, shell=True,
+        )
+        print("")
+        print("-" * 60)
+    finally:
+        for p in processes:
+            LOG.info(f"Terminating {p.args}")
+            pgid = os.getpgid(p.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            try:
+                p.wait(timeout=5)
+                print("Terminated gracefully")
+            except subprocess.TimeoutExpired:
+                os.killpg(pgid, signal.SIGKILL)
+
+if __name__ == "__main__":
+    run()
