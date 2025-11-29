@@ -36,6 +36,13 @@ static_resources:
                   #filename: "/home/christoph/envoy-sni-dynamic-forwarding/wasm-plugin/tcp-plugin.wasm"
                   filename: "/home/christoph/envoy-sni-dynamic-forwarding/wasm-plugin-1/target/wasm32-wasip1/release/proxy_wasm_example_grpc_auth_random.wasm"
               allow_precompiled: true
+            configuration:
+              "@type": type.googleapis.com/google.protobuf.StringValue
+              value: |
+                {
+                  "cluster": "waiter_service",
+                  "timeout": 60
+                }
       - name: envoy.filters.network.sni_dynamic_forward_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig

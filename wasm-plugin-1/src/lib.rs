@@ -1,11 +1,9 @@
-use log::info;
 use prost::Message;
 use proxy_wasm::hostcalls::call_foreign_function;
 use proxy_wasm::hostcalls::get_property;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Result;
 use std::time::Duration;
 
 pub mod wasm_extensions {
@@ -14,16 +12,21 @@ pub mod wasm_extensions {
         "/envoy.source.extensions.common.wasm.rs"
     ));
 }
-use crate::wasm_extensions::LifeSpan;
-use proxy_wasm::hostcalls::set_effective_context;
 
+// VM main routine. Sets up root context which holds a config.
+// That config is passed to stream contexts.
 proxy_wasm::main! {{
-    proxy_wasm::set_log_level(LogLevel::Trace);
-    proxy_wasm::set_stream_context(|context_id, root_context_id| -> Box<dyn StreamContext> {
-        log::info!("NEW CONTEXT CREATED: {}-{}", context_id, root_context_id); Box::new(GrpcAuthRandom) });
+    proxy_wasm::set_log_level(LogLevel::Info);
+    proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> {
+        Box::new(SniRootContext{
+            config: Default::default(),
+        })
+    });
 }}
 
-struct GrpcAuthRandom;
+struct ScaleFromZero {
+    config: Config,
+}
 
 #[derive(Serialize)]
 struct Sni {
@@ -36,12 +39,60 @@ struct Backend {
     port: String,
 }
 
-impl StreamContext for GrpcAuthRandom {
+// Config struct, which is deserialized from protobufs received from config file
+// or control plane.
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+struct Config {
+    cluster: String,
+    timeout: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cluster: Default::default(),
+            timeout: 30, // Default timeout
+        }
+    }
+}
+
+struct SniRootContext {
+    config: Config,
+}
+
+impl Context for SniRootContext {}
+
+impl RootContext for SniRootContext {
+    fn on_configure(&mut self, config_size: usize) -> bool {
+        log::info!("On CONFIG: {}", config_size);
+        // TODO: bailout when no config
+
+        let config_bytes = self.get_plugin_configuration().unwrap();
+        // TODO: Unwrap and check error
+        self.config = serde_json::from_slice(&config_bytes).unwrap();
+        log::info!("On CONFIG: {}", self.config.cluster);
+        log::info!("On CONFIG: {}", self.config.timeout);
+        true
+    }
+
+    fn create_stream_context(&self, _: u32) -> Option<Box<dyn StreamContext>> {
+        Some(Box::new(ScaleFromZero {
+            config: self.config.clone(),
+        }))
+    }
+
+    fn get_type(&self) -> Option<ContextType> {
+        Some(ContextType::StreamContext)
+    }
+}
+
+impl StreamContext for ScaleFromZero {
     fn on_new_connection(&mut self) -> Action {
         log::info!("On NEW connection called");
 
         // Get SNI from the connection.
-        let server = match GrpcAuthRandom::get_sni() {
+        let server = match ScaleFromZero::get_sni() {
             Some(sni) => sni,
             None => return Action::Continue,
         };
@@ -50,10 +101,8 @@ impl StreamContext for GrpcAuthRandom {
         let server_name = Sni { name: server };
         let server_name_json = serde_json::to_string(&server_name).unwrap();
 
-        //self.setUpstream();
-
         match self.dispatch_http_call(
-            "waiter_service",
+            &self.config.cluster,
             vec![
                 (":method", "POST"),
                 (":path", "/scale_from_zero"),
@@ -62,7 +111,7 @@ impl StreamContext for GrpcAuthRandom {
             ],
             Some(server_name_json.as_bytes()),
             vec![],
-            Duration::from_secs(30),
+            Duration::from_secs(self.config.timeout as u64),
         ) {
             Ok(_) => return Action::Pause,
             Err(e) => {
@@ -73,7 +122,7 @@ impl StreamContext for GrpcAuthRandom {
     }
 }
 
-impl GrpcAuthRandom {
+impl ScaleFromZero {
     // Function extracts sni from the stream info related to the connection.
     fn get_sni() -> Option<String> {
         // Get SNI from downstream connection.
@@ -114,12 +163,11 @@ impl GrpcAuthRandom {
         };
     }
 
-    fn setUpstream(&mut self, server: String, port: String) {
+    fn set_upstream(&mut self, server: String, port: String) {
         let dynamic_port = wasm_extensions::SetEnvoyFilterStateArguments {
             path: "envoy.upstream.dynamic_port".to_string(),
             value: port,
-            // TODO: change it to enum
-            span: 0, /*LifeSpan::FilterChain */
+            span: wasm_extensions::LifeSpan::FilterChain.into(),
         };
         let mut buf = Vec::new();
         buf.reserve(dynamic_port.encoded_len());
@@ -136,8 +184,7 @@ impl GrpcAuthRandom {
         let dynamic_host = wasm_extensions::SetEnvoyFilterStateArguments {
             path: "envoy.upstream.dynamic_host".to_string(),
             value: server,
-            // TODO: change it to enum
-            span: 0, /*LifeSpan::FilterChain */
+            span: wasm_extensions::LifeSpan::FilterChain.into(),
         };
 
         buf.clear();
@@ -147,7 +194,7 @@ impl GrpcAuthRandom {
     }
 }
 
-impl Context for GrpcAuthRandom {
+impl Context for ScaleFromZero {
     fn on_http_call_response(&mut self, _: u32, _: usize, body_size: usize, _: usize) {
         log::info!("RECEIVED HTTP CALL RESPONSE");
 
@@ -161,7 +208,7 @@ impl Context for GrpcAuthRandom {
                 let backend: Backend = serde_json::from_str(&body_string.unwrap()).unwrap();
 
                 log::info!("Received server values {}:{}", backend.server, backend.port);
-                self.setUpstream(backend.server, backend.port);
+                self.set_upstream(backend.server, backend.port);
             }
         }
 
