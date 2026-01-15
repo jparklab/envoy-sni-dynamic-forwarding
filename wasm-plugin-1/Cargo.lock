@@ -48,6 +48,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "envoy-sni-dynamic-forwarding"
+version = "0.0.1"
+dependencies = [
+ "log",
+ "prost",
+ "prost-build",
+ "proxy-wasm",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,18 +271,6 @@ source = "git+https://github.com/proxy-wasm/proxy-wasm-rust-sdk.git?rev=ba23ab4#
 dependencies = [
  "hashbrown",
  "log",
-]
-
-[[package]]
-name = "proxy-wasm-example-grpc-auth-random"
-version = "0.0.1"
-dependencies = [
- "log",
- "prost",
- "prost-build",
- "proxy-wasm",
- "serde",
- "serde_json",
 ]
 
 [[package]]

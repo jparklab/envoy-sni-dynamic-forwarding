@@ -1,6 +1,6 @@
 [package]
 publish = false
-name = "proxy-wasm-example-grpc-auth-random"
+name = "envoy-sni-dynamic-forwarding"
 version = "0.0.1"
 description = "Proxy-Wasm plugin example: gRPC auth (random)"
 license = "Apache-2.0"
