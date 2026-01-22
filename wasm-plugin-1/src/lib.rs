@@ -94,7 +94,11 @@ impl StreamContext for ScaleFromZero {
         // Get SNI from the connection.
         let server = match ScaleFromZero::get_sni() {
             Some(sni) => sni,
-            None => return Action::Continue,
+            None => {
+                log::info!("Connection's SNI not found. Resetting connection.");
+                self.close_downstream();
+                return Action::Pause;
+            }
         };
 
         // build the json payload

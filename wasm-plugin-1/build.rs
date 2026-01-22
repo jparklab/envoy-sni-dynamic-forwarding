@@ -8,7 +8,10 @@ fn main() -> Result<()> {
 
     let root_dir = env::var("ENVOY_DIR").unwrap() + "/";
     prost_build::compile_protos(
-        &[root_dir.clone() + "source/extensions/common/wasm/ext/set_envoy_filter_state.proto"],
+        &[format!(
+            "{}{}",
+            root_dir, "source/extensions/common/wasm/ext/set_envoy_filter_state.proto"
+        )],
         &[root_dir],
     )?;
     Ok(())
