@@ -29,11 +29,17 @@ struct ScaleFromZero {
 }
 
 #[derive(Serialize)]
+// This structure is serialized as JSON and sent to HTTP server
+// which provides scale-from-zero functionality. The server will reply
+// with "Backend" structure.
 struct Sni {
     name: String,
 }
 
 #[derive(Deserialize)]
+// This structure is sent back by HTTP server which provides
+// scale-from-zero functionality. The response is used to
+// program Dynamic Forward Proxy.
 struct Backend {
     server: String,
     port: String,
@@ -46,13 +52,22 @@ struct Backend {
 struct Config {
     cluster: String,
     timeout: u32,
+    error_server: String,
+    error_server_port: u32,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            // Cluster with scale-from-zero HTTP server.
             cluster: Default::default(),
+            // Timeout when communicating with scale-from-zero HTTP server.
             timeout: 30, // Default timeout
+            // Error server is used to program dynamic forward proxy when
+            // communication with scale-from-zero HTTP server fails or response
+            // is invalid.
+            error_server: Default::default(),
+            error_server_port: 0,
         }
     }
 }
@@ -65,14 +80,23 @@ impl Context for SniRootContext {}
 
 impl RootContext for SniRootContext {
     fn on_configure(&mut self, config_size: usize) -> bool {
-        log::info!("On CONFIG: {}", config_size);
-        // TODO: bailout when no config
+        log::trace!("On CONFIG: {}", config_size);
 
         let config_bytes = self.get_plugin_configuration().unwrap();
-        // TODO: Unwrap and check error
         self.config = serde_json::from_slice(&config_bytes).unwrap();
-        log::info!("On CONFIG: {}", self.config.cluster);
-        log::info!("On CONFIG: {}", self.config.timeout);
+        // Verify config
+        if self.config.cluster.is_empty() {
+            log::info!("Config field cluster cannot be empty");
+            return false;
+        }
+        if self.config.error_server.is_empty() {
+            log::info!("Config field error_server cannot be empty");
+            return false;
+        }
+        if self.config.error_server_port == 0 {
+            log::info!("Config field error_server_port must be defined and  cannot be zero");
+            return false;
+        }
         true
     }
 

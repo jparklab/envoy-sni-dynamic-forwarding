@@ -40,7 +40,9 @@ static_resources:
               value: |
                 {
                   "cluster": "waiter_service",
-                  "timeout": 60
+                  "timeout": 60,
+                  "error_server": "127.0.0.1",
+                  "error_server_port": 10111
                 }
       - name: envoy.filters.network.sni_dynamic_forward_proxy
         typed_config:
