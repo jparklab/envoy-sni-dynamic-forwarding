@@ -223,8 +223,41 @@ impl ScaleFromZero {
 }
 
 impl Context for ScaleFromZero {
-    fn on_http_call_response(&mut self, _: u32, _: usize, body_size: usize, _: usize) {
+    fn on_http_call_response(&mut self, _: u32, headers_num: usize, body_size: usize, _: usize) {
         log::info!("RECEIVED HTTP CALL RESPONSE");
+
+        if headers_num == 0 {
+            self.set_upstream(
+                self.config.error_server.clone(),
+                self.config.error_server_port.to_string(),
+            );
+            self.resume_downstream();
+            return;
+        }
+
+        // Get the response code from response headers.
+        match self.get_http_call_response_header(":status") {
+            Some(code) => {
+                if code != "200" {
+                    log::info!("Error received from HTTP server. Code: {}", code);
+                    self.set_upstream(
+                        self.config.error_server.clone(),
+                        self.config.error_server_port.to_string(),
+                    );
+                    self.resume_downstream();
+                    return;
+                }
+            }
+            None => {
+                log::info!("Response from HTTP server does not contain status code");
+                self.set_upstream(
+                    self.config.error_server.clone(),
+                    self.config.error_server_port.to_string(),
+                );
+                self.resume_downstream();
+                return;
+            }
+        }
 
         // Extract the body and read server and port values.
         if let Some(body) = self.get_http_call_response_body(0, body_size) {
